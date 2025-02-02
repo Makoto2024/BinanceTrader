@@ -21,7 +21,7 @@ const (
 var (
 	startTime        = time.Date(2018, 1, 1, 0, 0, 0, 0, time.UTC)
 	endTime          = time.Date(2025, 2, 1, 0, 0, 0, 0, time.UTC)
-	interval         = common.ListKLinesInterval_1m
+	interval         = common.ListKLinesInterval_5m
 	intervalDuration = common.IntervalDuration(interval)
 
 	ErrAllStoreFinished = errors.New("all stored")
@@ -175,7 +175,7 @@ func continueCollectFromCSV(path string) (*KLineCollector, error) {
 
 func main() {
 	ctx := context.Background()
-	csvPath := fmt.Sprintf("SOLUSDT_%s.csv", interval)
+	csvPath := fmt.Sprintf("%s_%s.csv", tickerSymbol, interval)
 
 	// Get all 5m KLines.
 	c, err := continueCollectFromCSV(csvPath)
