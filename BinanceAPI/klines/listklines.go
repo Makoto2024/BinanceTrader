@@ -56,14 +56,15 @@ func ListKLines(ctx context.Context, param ListKLinesParam) ([]KLine, error) {
 
 func listKLineAPI(ctx context.Context, param *ListKLinesParam) ([]KLine, error) {
 	// Prepare request.
-	const apiURL = common.RootAPIEndPoint + "/fapi/v1/klines"
+	const apiURL = common.RootAPIEndPoint + "/fapi/v1/continuousKlines"
 	client := http.Client{}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("new request url %q: %w", apiURL, err)
 	}
 	query := url.Values{}
-	query.Add("symbol", param.TickerSymbol)
+	query.Add("pair", param.TickerSymbol)
+	query.Add("contractType", "PERPETUAL")
 	query.Add("interval", string(param.Interval))
 	query.Add("startTime", strconv.FormatInt(param.StartTime.UnixMilli(), 10))
 	query.Add("endTime", strconv.FormatInt(param.EndTime.UnixMilli(), 10))
