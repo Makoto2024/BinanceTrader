@@ -1,1 +1,8 @@
 go 1.23.4
+
+use (
+	./BinanceAPI/common
+	./BinanceAPI/klines
+	./BinanceAPI/storage
+	./BinanceAPI/testbins
+)
