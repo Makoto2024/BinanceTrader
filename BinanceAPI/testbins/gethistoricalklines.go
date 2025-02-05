@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/csv"
 	"errors"
@@ -19,11 +20,6 @@ const (
 )
 
 var (
-	startTime        = time.Date(2018, 1, 1, 0, 0, 0, 0, time.UTC)
-	endTime          = time.Date(2025, 2, 1, 0, 0, 0, 0, time.UTC)
-	interval         = common.ListKLinesInterval_5m
-	intervalDuration = common.IntervalDuration(interval)
-
 	ErrAllStoreFinished = errors.New("all stored")
 	ErrNotConsecutive   = errors.New("not consecutive")
 )
@@ -51,7 +47,6 @@ func NewKLineCollector(from, to time.Time, dur time.Duration) *KLineCollector {
 		NextOpenTime: from,
 		LastOpenTime: time.UnixMilli(from.UnixMilli() + (expectKLineNum-1)*dur.Milliseconds()),
 		Interval:     dur,
-		LastKLine:    nil,
 	}
 }
 
@@ -127,7 +122,52 @@ func createNewCSV(path string) error {
 	return nil
 }
 
-func continueCollectFromCSV(path string) (*KLineCollector, error) {
+// When continuing from last download, the last CSV record might not be
+// a multiple of the specified inteval. For example, when downloading
+// 1h KLines, the last download might stop at 23:30, which should be 24:00 instead.
+func abandonLastCSVRecord(csvPath string) error {
+	// Open the file for reading and writing.  We need read to count lines, and write to truncate.
+	file, err := os.OpenFile(csvPath, os.O_RDWR, 0644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	reader := bufio.NewReader(file)
+	var lastLine string
+	var totalBytes int64
+
+	// Iterate through the file to count offset of the beginning of the last line.
+	for {
+		line, err := reader.ReadString('\n')
+		if len(line) > 0 {
+			totalBytes += int64(len(line))
+			lastLine = line
+		}
+		if err == io.EOF {
+			break
+		} else if err != nil {
+			return fmt.Errorf("ReadString('\n'): %w", err)
+		}
+	}
+
+	bytesBeforeLastLine := totalBytes - int64(len(lastLine))
+	if bytesBeforeLastLine == 0 {
+		return nil // Empty file, nothing to do.
+	}
+
+	// Truncate the file to the offset of the second to last line.
+	if err = file.Truncate(bytesBeforeLastLine); err != nil {
+		return fmt.Errorf("Truncate(%d): %w", bytesBeforeLastLine, err)
+	}
+	return nil
+}
+
+func continueCollectFromCSV(
+	startTime, endTime time.Time,
+	interval common.ListKLinesInterval, path string,
+) (*KLineCollector, error) {
+	intervalDuration := common.IntervalDuration(interval)
 	if _, err := os.Stat(path); err != nil {
 		if !os.IsNotExist(err) {
 			return nil, fmt.Errorf("stat file: %w", err)
@@ -141,6 +181,10 @@ func continueCollectFromCSV(path string) (*KLineCollector, error) {
 
 	// CSV exists, check if all stored data are valid (consecutive) and return a
 	// collector with the continuing state.
+	if err := abandonLastCSVRecord(path); err != nil {
+		return nil, fmt.Errorf("abandonLastCSVRecord: %w", err)
+	}
+
 	fp, err := os.OpenFile(path, os.O_RDONLY, 0644)
 	if err != nil {
 		return nil, fmt.Errorf("open file: %w", err)
@@ -173,20 +217,25 @@ func continueCollectFromCSV(path string) (*KLineCollector, error) {
 	return c, nil
 }
 
-func main() {
-	ctx := context.Background()
-	csvPath := fmt.Sprintf("%s_%s.csv", tickerSymbol, interval)
+func downloadOneTimeFrame(
+	ctx context.Context,
+	startTime, endTime time.Time,
+	interval common.ListKLinesInterval,
+) error {
+	intervalDuration := common.IntervalDuration(interval)
+	csvPath := fmt.Sprintf("../../price_data/%s/%s_%s.csv",
+		tickerSymbol, tickerSymbol, interval)
 
 	// Get all 5m KLines.
-	c, err := continueCollectFromCSV(csvPath)
+	c, err := continueCollectFromCSV(startTime, endTime, interval, csvPath)
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("continueCollectFromCSV(%q): %w", csvPath, err)
 	}
 	hasRecordInCSV := c.LastKLine != nil
 
 	fp, err := os.OpenFile(csvPath, os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("OpenFile(%q): %w", csvPath, err)
 	}
 	defer fp.Close()
 	writer := csv.NewWriter(fp)
@@ -202,7 +251,7 @@ func main() {
 			EndTime:      apiEndTime,
 		})
 		if err != nil {
-			panic(err)
+			return fmt.Errorf("ListKLines: %w", err)
 		}
 		if len(lines) == 0 {
 			if hasRecordInCSV {
@@ -236,19 +285,41 @@ func main() {
 					fmt.Printf("Expect open time %q but got %q, fill with previous line instead\n",
 						formatTime(lineToWrite.OpenTime), formatTime(line.OpenTime))
 					if newErr := c.StoreKLine(lineToWrite); newErr != nil {
-						panic(fmt.Errorf("recovering %v but failed: %w", err, newErr))
+						return fmt.Errorf("recovering %v but failed: %w", err, newErr)
 					}
 				} else {
-					panic(fmt.Errorf("StoreKLine(%+v): %w", line, err))
+					return fmt.Errorf("StoreKLine(%+v): %w", line, err)
 				}
 				// Commit to CSV file.
 				if err := writer.Write(storage.KLineToCSVRecord(lineToWrite)); err != nil {
-					panic(fmt.Errorf("KLineToCSVRecord(%+v): %w", lineToWrite, err))
+					return fmt.Errorf("KLineToCSVRecord(%+v): %w", lineToWrite, err)
 				}
 				if lineToWrite == line {
 					break
 				}
 			}
+		}
+	}
+	return nil
+}
+
+func main() {
+	ctx := context.Background()
+
+	startTime := time.Date(2018, 1, 1, 0, 0, 0, 0, time.UTC)
+	endTime := time.Date(2025, 2, 4, 0, 0, 0, 0, time.UTC)
+
+	for _, interval := range []common.ListKLinesInterval{
+		common.ListKLinesInterval_5m,
+		common.ListKLinesInterval_15m,
+		common.ListKLinesInterval_1h,
+		common.ListKLinesInterval_4h,
+		common.ListKLinesInterval_12h,
+		common.ListKLinesInterval_1d,
+	} {
+		fmt.Printf("\n\nDownloading time frame %s\n", interval)
+		if err := downloadOneTimeFrame(ctx, startTime, endTime, interval); err != nil {
+			panic(fmt.Errorf("downloadOneTimeFrame(%v) failed with err %v", interval, err))
 		}
 	}
 }
