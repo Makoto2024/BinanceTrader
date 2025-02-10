@@ -307,7 +307,7 @@ func main() {
 	ctx := context.Background()
 
 	startTime := time.Date(2018, 1, 1, 0, 0, 0, 0, time.UTC)
-	endTime := time.Date(2025, 2, 4, 0, 0, 0, 0, time.UTC)
+	endTime := time.Date(2025, 2, 10, 0, 0, 0, 0, time.UTC)
 
 	for _, interval := range []common.ListKLinesInterval{
 		common.ListKLinesInterval_5m,
