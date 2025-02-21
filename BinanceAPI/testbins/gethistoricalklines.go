@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/Makoto2024/BinanceTrader/BinanceAPI/common"
@@ -223,8 +224,19 @@ func downloadOneTimeFrame(
 	interval common.ListKLinesInterval,
 ) error {
 	intervalDuration := common.IntervalDuration(interval)
-	csvPath := fmt.Sprintf("../../price_data/%s/%s_%s.csv",
-		tickerSymbol, tickerSymbol, interval)
+
+	// Create data folder for the symbol is absent.
+	csvDir := filepath.Join("../../price_data", tickerSymbol)
+	if _, err := os.Stat(csvDir); err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("stat folder(%q): %w", csvDir, err)
+		}
+		// Create file and start from the beggining.
+		if err := os.MkdirAll(csvDir, 0755); err != nil {
+			return fmt.Errorf("create folder(%q): %w", csvDir, err)
+		}
+	}
+	csvPath := filepath.Join(csvDir, fmt.Sprintf("%s_%s.csv", tickerSymbol, interval))
 
 	// Get all 5m KLines.
 	c, err := continueCollectFromCSV(startTime, endTime, interval, csvPath)
